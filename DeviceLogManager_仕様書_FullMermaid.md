@@ -102,77 +102,97 @@ graph TD
 ## 8. クラス構造詳細
 ```mermaid
 classDiagram
+  direction LR
+
   class DeviceReading {
-    +DateTime TimestampUtc
-    +double TemperatureC
-    +string Status
-    +bool ErrorFlag
+    +TimestampUtc: DateTime
+    +TemperatureC: double
+    +Status: string
+    +ErrorFlag: bool
   }
+
   class DeviceSettings {
-    +int MeasureIntervalSec
-    +double WarnThresholdC
-    +TemperatureUnit Unit
-    +Validate():ValidationResult
+    +MeasureIntervalSec: int
+    +WarnThresholdC: double
+    +Unit: TemperatureUnit
+    +Validate(): ValidationResult
   }
+
   class ValidationResult {
-    +bool IsValid
-    +IEnumerable~string~ Errors
+    +IsValid: bool
+    +Errors: List~string~
   }
-  enum TemperatureUnit { C; F }
+
+  class TemperatureUnit {
+    <<enumeration>>
+    C
+    F
+  }
+
   class DeviceServiceFacade {
-    +Connect(portName)
+    +Connect(portName: string)
     +Disconnect()
     +StartPolling()
     +StopPolling()
-    +ApplySettings(DeviceSettings)
-    +event ReadingReceived
-    +event ErrorOccurred
+    +ApplySettings(settings: DeviceSettings)
+    +ReadingReceived(reading: DeviceReading)
+    +ErrorOccurred(message: string)
   }
+  note for DeviceServiceFacade "ReadingReceived / ErrorOccurred はイベント (C# event)"
+
   class SerialPortClient {
-    -SerialPort _port
-    +Open(name)
+    -_port: SerialPort
+    +Open(name: string)
     +Close()
-    +WriteLine(cmd)
-    +ReadLine(timeout):string
+    +WriteLine(cmd: string)
+    +ReadLine(timeoutMs: int): string
   }
+
   class DeviceProtocolParser {
-    +ParseReading(raw):DeviceReading
-    +BuildSetInterval(sec):string
-    +BuildSetThreshold(val):string
-    +BuildSetUnit(unit):string
+    +ParseReading(raw: string): DeviceReading
+    +BuildSetInterval(sec: int): string
+    +BuildSetThreshold(val: double): string
+    +BuildSetUnit(unit: TemperatureUnit): string
   }
+
   class LoggingController {
-    +Begin(directory)
-    +Write(reading, settings)
+    +Begin(directory: string)
+    +Write(reading: DeviceReading, settings: DeviceSettings)
     +End()
   }
+
   class CsvLogWriter {
-    +Open(fullPath)
-    +Append(line)
+    +Open(fullPath: string)
+    +Append(line: string)
     +Close()
   }
+
   class VisualizationController {
-    -Queue~DeviceReading~ buffer
-    +Add(reading)
-    +GetSeries():IEnumerable~DeviceReading~
+    -bufferCapacity: int
+    +Add(reading: DeviceReading)
+    +GetSeries(): List~DeviceReading~
     +Clear()
   }
+
   class SettingsRepository {
-    +Load():AppState
-    +Save(AppState)
+    +Load(): AppState
+    +Save(state: AppState)
   }
+
   class AppState {
-    +string LastPortName
-    +string LastLogDirectory
-    +DeviceSettings LastSettings
+    +LastPortName: string
+    +LastLogDirectory: string
+    +LastSettings: DeviceSettings
   }
-  DeviceServiceFacade --> SerialPortClient
-  DeviceServiceFacade --> DeviceProtocolParser
-  DeviceServiceFacade --> LoggingController
-  DeviceServiceFacade --> VisualizationController
-  DeviceServiceFacade --> SettingsRepository
-  LoggingController --> CsvLogWriter
+
+  DeviceServiceFacade --> SerialPortClient : uses
+  DeviceServiceFacade --> DeviceProtocolParser : uses
+  DeviceServiceFacade --> LoggingController : controls
+  DeviceServiceFacade --> VisualizationController : updates
+  DeviceServiceFacade --> SettingsRepository : persists
+  LoggingController --> CsvLogWriter : writes
   AppState --> DeviceSettings
+  VisualizationController --> DeviceReading
 ```
 
 ## 9. シーケンス図
@@ -191,48 +211,44 @@ sequenceDiagram
 ### 9.2 ポーリングサイクル
 ```mermaid
 sequenceDiagram
-  autonumber
   participant T as Timer
   participant F as Facade
-  participant S as SerialPort
+  participant S as Serial
   participant P as Parser
-  participant V as VisController
-  participant L as Logging
-  participant UI as UI
-  T->>F: Tick()
-  F->>S: WriteLine("GET_TEMP")
-  F->>S: ReadLine()
-  S-->>F: "TEMP=24.3;STATUS=NORMAL"
-  F->>P: Parse(raw)
-  P-->>F: DeviceReading
-  F->>V: Add(reading)
-  alt Logging enabled
-    F->>L: Write(reading, settings)
+  participant V as Vis
+  participant L as Log
+  participant U as UI
+  T->>F: tick
+  F->>S: GET_TEMP
+  S-->>F: TEMP 24.3 NORMAL
+  F->>P: parse
+  P-->>F: reading
+  F->>V: add
+  opt logging
+    F->>L: write
   end
-  F-->>UI: ReadingReceived(reading)
+  F-->>U: update
 ```
 
 ### 9.3 設定変更フロー
 ```mermaid
 sequenceDiagram
-  participant UI as UI
+  participant U as UI
   participant F as Facade
   participant P as Parser
-  participant S as SerialPort
-  UI->>F: ApplySettings(newSettings)
-  F->>P: BuildSetInterval(sec)
-  P-->>F: "SET_INTERVAL=5"
-  F->>S: WriteLine(Cmd)
-  F->>S: ReadLine()
+  participant S as Serial
+  U->>F: apply settings
+  F->>P: build interval
+  P-->>F: SET_INTERVAL 5
+  F->>S: send interval
   S-->>F: OK
-  loop For each changed field
-    F->>P: BuildSet...(value)
-    P-->>F: Command
-    F->>S: WriteLine(Command)
-    F->>S: ReadLine()
-    S-->>F: OK/ERR
+  loop each changed field
+    F->>P: build cmd
+    P-->>F: cmd
+    F->>S: send cmd
+    S-->>F: OK or ERR
   end
-  F-->>UI: Success or ErrorOccurred
+  F-->>U: result
 ```
 
 ## 10. 状態機械
